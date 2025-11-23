@@ -10,19 +10,24 @@ from downloader.utils import get_db_handle
 
 class DownloadDataView(APIView):
     def get(self, request):
-        date_str = request.GET.get('date')
-        if not date_str:
-            return Response({"error": "Date parameter is required (YYYY-MM-DD)"}, status=status.HTTP_400_BAD_REQUEST)
+        start_date_str = request.GET.get('start_date')
+        end_date_str = request.GET.get('end_date')
+        
+        if not start_date_str or not end_date_str:
+            return Response({"error": "Both start_date and end_date parameters are required (YYYY-MM-DD)"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Parse date string
+            # Parse date strings
             # User input date is in BST (Bangladesh Standard Time)
             bst_tz = pytz.timezone('Asia/Dhaka')
-            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            start_date_obj = datetime.strptime(start_date_str, '%Y-%m-%d')
+            end_date_obj = datetime.strptime(end_date_str, '%Y-%m-%d')
             
             # Create start and end time in BST
-            start_bst = bst_tz.localize(datetime.combine(date_obj, datetime.min.time()))
-            end_bst = bst_tz.localize(datetime.combine(date_obj, datetime.max.time()))
+            # Start from 00:00:00 of start_date
+            start_bst = bst_tz.localize(datetime.combine(start_date_obj, datetime.min.time()))
+            # End at 23:59:59 of end_date
+            end_bst = bst_tz.localize(datetime.combine(end_date_obj, datetime.max.time()))
             
             # Convert to UTC for MongoDB query
             start_utc = start_bst.astimezone(pytz.UTC)
@@ -42,7 +47,7 @@ class DownloadDataView(APIView):
 
             # Prepare CSV response
             response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = f'attachment; filename="harness_data_{date_str}.csv"'
+            response['Content-Disposition'] = f'attachment; filename="harness_data_{start_date_str}_to_{end_date_str}.csv"'
 
             writer = csv.writer(response)
             # Columns as requested

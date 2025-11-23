@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,19 +15,22 @@
             height: 100vh;
             margin: 0;
         }
+
         .container {
             background: white;
             padding: 2rem;
             border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             text-align: center;
             width: 100%;
             max-width: 400px;
         }
+
         h1 {
             color: #333;
             margin-bottom: 1.5rem;
         }
+
         input[type="date"] {
             padding: 10px;
             border: 1px solid #ddd;
@@ -36,6 +40,7 @@
             margin-bottom: 1rem;
             font-size: 1rem;
         }
+
         button {
             background-color: #007bff;
             color: white;
@@ -47,9 +52,11 @@
             width: 100%;
             transition: background-color 0.3s;
         }
+
         button:hover {
             background-color: #0056b3;
         }
+
         .note {
             margin-top: 1rem;
             font-size: 0.9rem;
@@ -57,27 +64,54 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>Harness Data Download</h1>
-        <p>Select a date to download the CSV report.</p>
-        <input type="date" id="datePicker" required>
+        <p>Select a date range to download the CSV report.</p>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 1rem;">
+            <div style="flex: 1;">
+                <label for="startDate"
+                    style="display: block; margin-bottom: 5px; text-align: left; font-size: 0.9rem; color: #555;">Start
+                    Date:</label>
+                <input type="date" id="startDate" required>
+            </div>
+            <div style="flex: 1;">
+                <label for="endDate"
+                    style="display: block; margin-bottom: 5px; text-align: left; font-size: 0.9rem; color: #555;">End
+                    Date:</label>
+                <input type="date" id="endDate" required>
+            </div>
+        </div>
+
         <button onclick="downloadData()">Download CSV</button>
         <p class="note">Data is in Bangladesh Standard Time (BST).</p>
     </div>
 
     <script>
         function downloadData() {
-            const date = document.getElementById('datePicker').value;
-            if (!date) {
-                alert('Please select a date.');
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            if (!startDate || !endDate) {
+                alert('Please select both start and end dates.');
                 return;
             }
-            window.location.href = `/api/download/?date=${date}`;
+
+            if (startDate > endDate) {
+                alert('Start date cannot be after end date.');
+                return;
+            }
+
+            window.location.href = `/api/download/?start_date=${startDate}&end_date=${endDate}`;
         }
-        
-        // Set default date to today
-        document.getElementById('datePicker').valueAsDate = new Date();
+
+        // Set default dates
+        const today = new Date();
+        document.getElementById('endDate').valueAsDate = today;
+        document.getElementById('startDate').valueAsDate = today;
     </script>
 </body>
+
 </html>

@@ -8,3 +8,5 @@ python-dotenv==1.2.1
 pytz==2025.2
 sqlparse==0.5.3
 tzdata==2025.2
+gunicorn
+whitenoise==6.11.0
