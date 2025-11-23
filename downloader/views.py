@@ -8,7 +8,10 @@ from rest_framework import status
 from django.shortcuts import render
 from downloader.utils import get_db_handle
 
-class DownloadDataView(APIView):
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
+
+class DownloadDataView(LoginRequiredMixin, APIView):
     def get(self, request):
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -94,5 +97,6 @@ class DownloadDataView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@login_required
 def index(request):
     return render(request, 'index.html')
