@@ -62,8 +62,8 @@ class Command(BaseCommand):
                         # The MongoDB collection was created with timeField='"time"' (quoted).
                         # So we must use the key '"time"' instead of 'time'.
                         data['"time"'] = dt_utc
-                        if 'time' in data:
-                            del data['time'] # Remove the original key to avoid confusion/duplication
+                        # Keep the original packet header fields as-is (including 'time').
+                        # The '"time"' field is used only for MongoDB time-series indexing and querying.
                         
                         # Insert into MongoDB
                         collection.insert_one(data)

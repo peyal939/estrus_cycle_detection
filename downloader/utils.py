@@ -82,39 +82,45 @@ def calculate_temperature_stats(start_utc, end_utc, tag_ids=None):
     collection = db["iotdata"]
     
     try:
-        # Build base query
-        match_stage = {
-            '"time"': {"$gte": start_utc, "$lte": end_utc},
-            "obj": {"$exists": True, "$ne": None}
-        }
-        
+        packet_match = {'"time"': {"$gte": start_utc, "$lte": end_utc}}
+
         # Add tag filtering if specified
         if tag_ids:
             if len(tag_ids) == 1:
-                match_stage["tagID"] = tag_ids[0]
+                packet_match["tagID"] = tag_ids[0]
             else:
-                match_stage["tagID"] = {"$in": tag_ids}
-        
-        # Count total documents (before temperature filtering)
-        total_count = collection.count_documents(match_stage)
-        
-        # Add temperature range filter (30-50°C)
-        match_stage["obj"] = {
-            "$gte": 30,
-            "$lte": 50,
-            "$type": ["double", "int", "long", "decimal"]
+                packet_match["tagID"] = {"$in": tag_ids}
+
+        # Count total samples (before temperature filtering)
+        total_count_pipeline = [
+            {"$match": packet_match},
+            {"$unwind": "$sensorData"},
+            {"$match": {"sensorData.obj": {"$exists": True, "$ne": None}}},
+            {"$count": "count"},
+        ]
+        total_count_result = list(collection.aggregate(total_count_pipeline))
+        total_count = total_count_result[0]["count"] if total_count_result else 0
+
+        valid_match = {
+            "sensorData.obj": {
+                "$gte": 30,
+                "$lte": 50,
+                "$type": ["double", "int", "long", "decimal"],
+            }
         }
-        
-        # MongoDB aggregation pipeline for statistics
+
+        # MongoDB aggregation pipeline for statistics (per-sample)
         pipeline = [
-            {"$match": match_stage},
+            {"$match": packet_match},
+            {"$unwind": "$sensorData"},
+            {"$match": valid_match},
             {"$group": {
                 "_id": None,
-                "mean": {"$avg": "$obj"},
-                "stdDevPop": {"$stdDevPop": "$obj"},
+                "mean": {"$avg": "$sensorData.obj"},
+                "stdDevPop": {"$stdDevPop": "$sensorData.obj"},
                 "count": {"$sum": 1},
-                "min": {"$min": "$obj"},
-                "max": {"$max": "$obj"}
+                "min": {"$min": "$sensorData.obj"},
+                "max": {"$max": "$sensorData.obj"}
             }}
         ]
         
@@ -140,23 +146,32 @@ def calculate_temperature_stats(start_utc, end_utc, tag_ids=None):
         invalid_count = total_count - valid_count
         
         # Get time series data for visualization (hourly aggregates)
-        # Convert UTC times to BST for display
-        bst_tz = pytz.timezone('Asia/Dhaka')
-        
+        # Use sample_time = packet_time + sensorData.millis (ms)
         time_series_pipeline = [
-            {"$match": match_stage},
-            {"$sort": {'"time"': 1}},
+            {"$match": packet_match},
+            {"$unwind": "$sensorData"},
+            {"$match": valid_match},
+            {"$addFields": {
+                "sample_time": {
+                    "$dateAdd": {
+                        "startDate": "$\"time\"",
+                        "unit": "millisecond",
+                        "amount": {"$ifNull": ["$sensorData.millis", 0]},
+                    }
+                }
+            }},
+            {"$sort": {"sample_time": 1}},
             {"$group": {
                 "_id": {
                     "$dateToString": {
                         "format": "%Y-%m-%d %H:00:00",
-                        "date": "$\"time\"",
-                        "timezone": "Asia/Dhaka"  # Convert to BST in aggregation
+                        "date": "$sample_time",
+                        "timezone": "Asia/Dhaka"
                     }
                 },
-                "avg_temp": {"$avg": "$obj"},
-                "min_temp": {"$min": "$obj"},
-                "max_temp": {"$max": "$obj"},
+                "avg_temp": {"$avg": "$sensorData.obj"},
+                "min_temp": {"$min": "$sensorData.obj"},
+                "max_temp": {"$max": "$sensorData.obj"},
                 "count": {"$sum": 1}
             }},
             {"$sort": {"_id": 1}},

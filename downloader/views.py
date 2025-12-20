@@ -67,10 +67,7 @@ class DownloadDataView(LoginRequiredMixin, APIView):
             )
 
             writer = csv.writer(response)
-            # Columns as requested
-            header = [
-                "tagID",
-                "C",
+            sensor_fields = [
                 "ax",
                 "ay",
                 "az",
@@ -83,8 +80,8 @@ class DownloadDataView(LoginRequiredMixin, APIView):
                 "amb",
                 "obj",
                 "soc",
-                "time",
             ]
+            header = ["packet_id", "tagID", "time", "time_epoch", "millis", *sensor_fields]
             writer.writerow(header)
 
             for doc in cursor:
@@ -93,6 +90,8 @@ class DownloadDataView(LoginRequiredMixin, APIView):
                 # It's better to show the time in BST in the CSV so it matches the requested date.
 
                 time_utc = doc.get('"time"')  # Access with quotes
+                time_epoch = doc.get("time")
+
                 time_bst_str = ""
                 if isinstance(time_utc, datetime):
                     # Ensure it is aware
@@ -100,25 +99,46 @@ class DownloadDataView(LoginRequiredMixin, APIView):
                         time_utc = pytz.UTC.localize(time_utc)
                     time_bst = time_utc.astimezone(bst_tz)
                     time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
+                    if time_epoch is None:
+                        # Reconstruct the original device-sent epoch (which was BST clock time expressed as UTC epoch)
+                        try:
+                            offset_seconds = int(time_bst.utcoffset().total_seconds())
+                            time_epoch = int(round(time_utc.timestamp() + offset_seconds))
+                        except Exception:
+                            time_epoch = None
+                elif time_epoch is not None:
+                    # Fallback: derive display time from packet header epoch
+                    try:
+                        timestamp = float(time_epoch)
+                        dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
+                            tzinfo=None
+                        )
+                        dt_bst = bst_tz.localize(dt_naive)
+                        time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        time_bst_str = ""
 
-                row = [
-                    doc.get("tagID"),
-                    doc.get("C"),
-                    doc.get("ax"),
-                    doc.get("ay"),
-                    doc.get("az"),
-                    doc.get("gx"),
-                    doc.get("gy"),
-                    doc.get("gz"),
-                    doc.get("mx"),
-                    doc.get("my"),
-                    doc.get("mz"),
-                    doc.get("amb"),
-                    doc.get("obj"),
-                    doc.get("soc"),
-                    time_bst_str,
-                ]
-                writer.writerow(row)
+                sensor_data = doc.get("sensorData")
+                if not isinstance(sensor_data, list) or not sensor_data:
+                    continue
+
+                packet_id = str(doc.get("_id", ""))
+                tag_id = doc.get("tagID")
+
+                for sample in sensor_data:
+                    if not isinstance(sample, dict):
+                        continue
+                    row = [
+                        packet_id,
+                        tag_id,
+                        time_bst_str,
+                        time_epoch,
+                        sample.get("millis"),
+                        *[sample.get(field) for field in sensor_fields],
+                    ]
+                    writer.writerow(row)
+
+            client.close()
 
             return response
 
@@ -243,9 +263,7 @@ class DatasetExporterView(LoginRequiredMixin, APIView):
             response["Content-Disposition"] = f'attachment; filename="{filename}"'
 
             writer = csv.writer(response)
-            header = [
-                "tagID",
-                "C",
+            sensor_fields = [
                 "ax",
                 "ay",
                 "az",
@@ -258,13 +276,15 @@ class DatasetExporterView(LoginRequiredMixin, APIView):
                 "amb",
                 "obj",
                 "soc",
-                "time",
             ]
+            header = ["packet_id", "tagID", "time", "time_epoch", "millis", *sensor_fields]
             writer.writerow(header)
 
             for doc in cursor:
                 # Convert time back to BST for CSV output
                 time_utc = doc.get('"time"')
+                time_epoch = doc.get("time")
+
                 time_bst_str = ""
                 if isinstance(time_utc, datetime):
                     if time_utc.tzinfo is None:
@@ -272,25 +292,44 @@ class DatasetExporterView(LoginRequiredMixin, APIView):
                     time_bst = time_utc.astimezone(bst_tz)
                     # Full seconds accuracy in timestamp
                     time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
+                    if time_epoch is None:
+                        # Reconstruct the original device-sent epoch (which was BST clock time expressed as UTC epoch)
+                        try:
+                            offset_seconds = int(time_bst.utcoffset().total_seconds())
+                            time_epoch = int(round(time_utc.timestamp() + offset_seconds))
+                        except Exception:
+                            time_epoch = None
+                elif time_epoch is not None:
+                    # Fallback: derive display time from packet header epoch
+                    try:
+                        timestamp = float(time_epoch)
+                        dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
+                            tzinfo=None
+                        )
+                        dt_bst = bst_tz.localize(dt_naive)
+                        time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        time_bst_str = ""
 
-                row = [
-                    doc.get("tagID"),
-                    doc.get("C"),
-                    doc.get("ax"),
-                    doc.get("ay"),
-                    doc.get("az"),
-                    doc.get("gx"),
-                    doc.get("gy"),
-                    doc.get("gz"),
-                    doc.get("mx"),
-                    doc.get("my"),
-                    doc.get("mz"),
-                    doc.get("amb"),
-                    doc.get("obj"),
-                    doc.get("soc"),
-                    time_bst_str,
-                ]
-                writer.writerow(row)
+                sensor_data = doc.get("sensorData")
+                if not isinstance(sensor_data, list) or not sensor_data:
+                    continue
+
+                packet_id = str(doc.get("_id", ""))
+                tag_id = doc.get("tagID")
+
+                for sample in sensor_data:
+                    if not isinstance(sample, dict):
+                        continue
+                    row = [
+                        packet_id,
+                        tag_id,
+                        time_bst_str,
+                        time_epoch,
+                        sample.get("millis"),
+                        *[sample.get(field) for field in sensor_fields],
+                    ]
+                    writer.writerow(row)
 
             client.close()
             return response
