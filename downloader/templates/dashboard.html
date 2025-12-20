@@ -1,0 +1,579 @@
+{% extends "base_generic.html" %}
+
+{% block content %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temperature Variance Dashboard - Harness Data Portal</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1rem;
+        }
+
+        .nav-links {
+            background: #f8f9fa;
+            padding: 15px 30px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 15px;
+        }
+
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .nav-links a:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .filter-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .filter-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3rem;
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+
+        .form-group input,
+        .form-group select {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .stat-card .unit {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .chart-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .chart-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3rem;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .info-message {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #bee5eb;
+        }
+
+        .logout-link {
+            text-align: right;
+            padding: 15px 30px;
+            background: #f8f9fa;
+        }
+
+        .logout-link a {
+            color: #dc3545;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .logout-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌡️ Temperature Variance Dashboard</h1>
+            <p>Real-time cow body temperature analytics (30-50°C valid range) - Times shown in Bangladesh Standard Time (BST)</p>
+        </div>
+
+        <div class="nav-links">
+            <a href="{% url 'index' %}">📊 Data Export</a>
+            <a href="{% url 'dashboard' %}" style="background: #667eea; color: white;">📈 Dashboard</a>
+        </div>
+
+        <div class="content">
+            <div class="filter-section">
+                <h2>Select Date Range and Tags</h2>
+                <form id="dashboardForm">
+                    <div class="filter-grid">
+                        <div class="form-group">
+                            <label for="startDate">Start Date:</label>
+                            <input type="date" id="startDate" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="endDate">End Date:</label>
+                            <input type="date" id="endDate" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="startTime">Start Time:</label>
+                            <input type="time" id="startTime" value="00:00:00" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="endTime">End Time:</label>
+                            <input type="time" id="endTime" value="23:59:59" step="1">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="tagFilter">Select Tag (leave as "All Tags" to see all):</label>
+                        <select id="tagFilter">
+                            <option value="">All Tags</option>
+                            {% for tag_id in tag_ids %}
+                            <option value="{{ tag_id }}">Tag {{ tag_id }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" class="btn-primary">Generate Dashboard</button>
+                        <button type="button" class="btn-secondary" onclick="resetFilters()">Reset</button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="resultsSection" style="display: none;">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Mean Temperature</h3>
+                        <div class="value" id="meanValue">--</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Variance</h3>
+                        <div class="value" id="varianceValue">--</div>
+                        <div class="unit">°C²</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Std Deviation</h3>
+                        <div class="value" id="stdDevValue">--</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Valid Data Points</h3>
+                        <div class="value" id="validCount">--</div>
+                        <div class="unit">records</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Min Temperature</h3>
+                        <div class="value" id="minValue">--</div>
+                        <div class="unit">°C</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Max Temperature</h3>
+                        <div class="value" id="maxValue">--</div>
+                        <div class="unit">°C</div>
+                    </div>
+                </div>
+
+                <div id="infoMessage" class="info-message" style="display: none;">
+                    <strong>Data Quality:</strong> <span id="invalidCount">0</span> records filtered out (outside 30-50°C range).
+                </div>
+
+                <div class="chart-section">
+                    <h2>Temperature Over Time (Hourly Averages)</h2>
+                    <div class="chart-container">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div id="loadingMessage" class="loading" style="display: none;">
+                Loading data... Please wait.
+            </div>
+
+            <div id="errorMessage" class="error" style="display: none;"></div>
+        </div>
+
+        <div class="logout-link">
+            <a href="{% url 'logout' %}">Logout</a>
+        </div>
+    </div>
+
+    <script>
+        let tempChart = null;
+
+        // Set default dates (today)
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('startDate').value = today;
+            document.getElementById('endDate').value = today;
+        });
+
+        document.getElementById('dashboardForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const startTime = document.getElementById('startTime').value;
+            const endTime = document.getElementById('endTime').value;
+            const selectedTag = document.getElementById('tagFilter').value;
+
+            // Show loading
+            document.getElementById('loadingMessage').style.display = 'block';
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('errorMessage').style.display = 'none';
+
+            try {
+                // Build query parameters
+                const params = new URLSearchParams({
+                    start_date: startDate,
+                    end_date: endDate,
+                    start_time: startTime,
+                    end_time: endTime,
+                });
+
+                if (selectedTag) {
+                    params.append('tag_ids', selectedTag);
+                }
+
+                const response = await fetch(`/api/temperature-variance/?${params.toString()}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to fetch data');
+                }
+
+                // Hide loading
+                document.getElementById('loadingMessage').style.display = 'none';
+
+                if (data.valid_count === 0) {
+                    document.getElementById('errorMessage').textContent = 'No valid temperature data found for the selected range. Please try a different date range or tags.';
+                    document.getElementById('errorMessage').style.display = 'block';
+                    return;
+                }
+
+                // Update statistics
+                document.getElementById('meanValue').textContent = data.mean.toFixed(2);
+                document.getElementById('varianceValue').textContent = data.variance.toFixed(4);
+                document.getElementById('stdDevValue').textContent = data.std_dev.toFixed(2);
+                document.getElementById('validCount').textContent = data.valid_count.toLocaleString();
+                document.getElementById('minValue').textContent = data.min.toFixed(2);
+                document.getElementById('maxValue').textContent = data.max.toFixed(2);
+
+                // Show invalid count if any
+                if (data.invalid_count > 0) {
+                    document.getElementById('invalidCount').textContent = data.invalid_count.toLocaleString();
+                    document.getElementById('infoMessage').style.display = 'block';
+                } else {
+                    document.getElementById('infoMessage').style.display = 'none';
+                }
+
+                // Update chart
+                updateChart(data.time_series);
+
+                // Show results
+                document.getElementById('resultsSection').style.display = 'block';
+
+            } catch (error) {
+                document.getElementById('loadingMessage').style.display = 'none';
+                document.getElementById('errorMessage').textContent = 'Error: ' + error.message;
+                document.getElementById('errorMessage').style.display = 'block';
+            }
+        });
+
+        function updateChart(timeSeries) {
+            const ctx = document.getElementById('tempChart').getContext('2d');
+
+            // Destroy existing chart if it exists
+            if (tempChart) {
+                tempChart.destroy();
+            }
+
+            const labels = timeSeries.map(item => item.time);
+            const avgTemps = timeSeries.map(item => item.avg);
+            const minTemps = timeSeries.map(item => item.min);
+            const maxTemps = timeSeries.map(item => item.max);
+
+            tempChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Average Temperature',
+                            data: avgTemps,
+                            borderColor: 'rgb(102, 126, 234)',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            borderWidth: 3,
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: 'Min Temperature',
+                            data: minTemps,
+                            borderColor: 'rgb(54, 162, 235)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'Max Temperature',
+                            data: maxTemps,
+                            borderColor: 'rgb(255, 99, 132)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            tension: 0.4,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Cow Body Temperature Trends - Bangladesh Standard Time (BST)',
+                            font: {
+                                size: 16,
+                                weight: 'bold'
+                            }
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    label += context.parsed.y.toFixed(2) + '°C';
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            min: 28,
+                            max: 52,
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)',
+                                font: {
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time (Bangladesh Standard Time)',
+                                font: {
+                                    weight: 'bold'
+                                }
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 45
+                            },
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
+
+        function resetFilters() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('startDate').value = today;
+            document.getElementById('endDate').value = today;
+            document.getElementById('startTime').value = '00:00:00';
+            document.getElementById('endTime').value = '23:59:59';
+            document.getElementById('tagFilter').value = '';
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
+{% endblock %}

@@ -11,6 +11,7 @@ from downloader.utils import (
     get_distinct_tag_ids,
     generate_export_filename,
     estimate_query_size,
+    calculate_temperature_stats,
     LARGE_DATASET_THRESHOLD,
 )
 
@@ -311,3 +312,88 @@ def index(request):
     tag_ids = get_distinct_tag_ids()
     context = {"tag_ids": tag_ids}
     return render(request, "index.html", context)
+
+
+@login_required
+def dashboard(request):
+    """Dashboard view for temperature variance visualization."""
+    tag_ids = get_distinct_tag_ids()
+    context = {"tag_ids": tag_ids}
+    return render(request, "dashboard.html", context)
+
+
+class TemperatureVarianceView(LoginRequiredMixin, APIView):
+    """
+    API endpoint for temperature variance statistics.
+    
+    Query Parameters:
+        - start_date (required): Start date in YYYY-MM-DD format
+        - end_date (optional): End date in YYYY-MM-DD format, defaults to start_date
+        - start_time (optional): Start time in HH:MM:SS format, defaults to 00:00:00
+        - end_time (optional): End time in HH:MM:SS format, defaults to 23:59:59
+        - tag_ids (optional): Comma-separated list of tag IDs, empty means all tags
+    
+    Returns:
+        JSON with temperature statistics including variance, mean, std_dev, and time series data.
+        Only includes temperatures in the valid range (30-50°C).
+    """
+    
+    def get(self, request):
+        # Get parameters
+        start_date_str = request.GET.get("start_date")
+        end_date_str = request.GET.get("end_date", start_date_str)
+        start_time_str = request.GET.get("start_time", "00:00:00")
+        end_time_str = request.GET.get("end_time", "23:59:59")
+        tag_ids_str = request.GET.get("tag_ids", "")
+        
+        if not start_date_str:
+            return Response(
+                {"error": "start_date parameter is required (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        try:
+            # Parse dates and times
+            bst_tz = pytz.timezone("Asia/Dhaka")
+            start_date_obj = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date_str, "%Y-%m-%d")
+            start_time_obj = datetime.strptime(start_time_str, "%H:%M:%S").time()
+            end_time_obj = datetime.strptime(end_time_str, "%H:%M:%S").time()
+            
+            # Create datetime objects in BST
+            start_datetime = datetime.combine(start_date_obj, start_time_obj)
+            end_datetime = datetime.combine(end_date_obj, end_time_obj)
+            
+            start_bst = bst_tz.localize(start_datetime)
+            end_bst = bst_tz.localize(end_datetime)
+            
+            # Convert to UTC
+            start_utc = start_bst.astimezone(pytz.UTC)
+            end_utc = end_bst.astimezone(pytz.UTC)
+            
+            # Parse tag IDs
+            tag_ids = None
+            if tag_ids_str:
+                try:
+                    tag_ids = [int(tid.strip()) for tid in tag_ids_str.split(",") if tid.strip()]
+                except ValueError:
+                    return Response(
+                        {"error": "Invalid tag_ids format. Use comma-separated integers."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            # Calculate statistics
+            stats = calculate_temperature_stats(start_utc, end_utc, tag_ids)
+            
+            return Response(stats, status=status.HTTP_200_OK)
+            
+        except ValueError as e:
+            return Response(
+                {"error": f"Invalid date/time format: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

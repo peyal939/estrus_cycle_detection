@@ -157,8 +157,9 @@
 <body>
     <div class="container">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h1 style="margin: 0; font-size: 1.5rem;">Harness Data</h1>
+            <h1 style="margin: 0; font-size: 1.5rem;">Harness Data Export</h1>
             <div>
+                <a href="{% url 'dashboard' %}" style="background: #28a745; color: white; padding: 8px 16px; border-radius: 4px; text-decoration: none; margin-right: 10px; display: inline-block; font-size: 0.9rem;">📈 Dashboard</a>
                 <span style="font-size: 0.9rem; margin-right: 10px;">{{ user.username }}</span>
                 <form action="{% url 'logout' %}" method="post" style="display: inline;">
                     {% csrf_token %}

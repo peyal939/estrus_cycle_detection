@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import pytz
 from pymongo import MongoClient
 from django.conf import settings
 
@@ -62,3 +63,129 @@ def generate_export_filename(tag_ids, start_datetime, end_datetime):
 def estimate_query_size(collection, query):
     """Estimate the number of documents matching the query."""
     return collection.count_documents(query)
+
+
+def calculate_temperature_stats(start_utc, end_utc, tag_ids=None):
+    """
+    Calculate temperature statistics (variance, mean, std dev) for obj field.
+    Filters out garbage data outside 30-50°C range.
+    
+    Args:
+        start_utc: Start datetime in UTC
+        end_utc: End datetime in UTC
+        tag_ids: List of tag IDs to filter, None for all tags
+    
+    Returns:
+        dict with keys: variance, mean, std_dev, count, valid_count, invalid_count, time_series
+    """
+    db, client = get_db_handle()
+    collection = db["iotdata"]
+    
+    try:
+        # Build base query
+        match_stage = {
+            '"time"': {"$gte": start_utc, "$lte": end_utc},
+            "obj": {"$exists": True, "$ne": None}
+        }
+        
+        # Add tag filtering if specified
+        if tag_ids:
+            if len(tag_ids) == 1:
+                match_stage["tagID"] = tag_ids[0]
+            else:
+                match_stage["tagID"] = {"$in": tag_ids}
+        
+        # Count total documents (before temperature filtering)
+        total_count = collection.count_documents(match_stage)
+        
+        # Add temperature range filter (30-50°C)
+        match_stage["obj"] = {
+            "$gte": 30,
+            "$lte": 50,
+            "$type": ["double", "int", "long", "decimal"]
+        }
+        
+        # MongoDB aggregation pipeline for statistics
+        pipeline = [
+            {"$match": match_stage},
+            {"$group": {
+                "_id": None,
+                "mean": {"$avg": "$obj"},
+                "stdDevPop": {"$stdDevPop": "$obj"},
+                "count": {"$sum": 1},
+                "min": {"$min": "$obj"},
+                "max": {"$max": "$obj"}
+            }}
+        ]
+        
+        result = list(collection.aggregate(pipeline))
+        
+        if not result or result[0]["count"] == 0:
+            return {
+                "variance": 0,
+                "mean": 0,
+                "std_dev": 0,
+                "count": 0,
+                "valid_count": 0,
+                "invalid_count": total_count,
+                "min": 0,
+                "max": 0,
+                "time_series": []
+            }
+        
+        stats = result[0]
+        std_dev = stats["stdDevPop"] if stats["stdDevPop"] is not None else 0
+        variance = std_dev ** 2
+        valid_count = stats["count"]
+        invalid_count = total_count - valid_count
+        
+        # Get time series data for visualization (hourly aggregates)
+        # Convert UTC times to BST for display
+        bst_tz = pytz.timezone('Asia/Dhaka')
+        
+        time_series_pipeline = [
+            {"$match": match_stage},
+            {"$sort": {'"time"': 1}},
+            {"$group": {
+                "_id": {
+                    "$dateToString": {
+                        "format": "%Y-%m-%d %H:00:00",
+                        "date": "$\"time\"",
+                        "timezone": "Asia/Dhaka"  # Convert to BST in aggregation
+                    }
+                },
+                "avg_temp": {"$avg": "$obj"},
+                "min_temp": {"$min": "$obj"},
+                "max_temp": {"$max": "$obj"},
+                "count": {"$sum": 1}
+            }},
+            {"$sort": {"_id": 1}},
+            {"$limit": 1000}  # Limit to 1000 data points for performance
+        ]
+        
+        time_series_result = list(collection.aggregate(time_series_pipeline))
+        time_series = [
+            {
+                "time": item["_id"],
+                "avg": round(item["avg_temp"], 2),
+                "min": round(item["min_temp"], 2),
+                "max": round(item["max_temp"], 2),
+                "count": item["count"]
+            }
+            for item in time_series_result
+        ]
+        
+        return {
+            "variance": round(variance, 4),
+            "mean": round(stats["mean"], 2),
+            "std_dev": round(std_dev, 2),
+            "count": total_count,
+            "valid_count": valid_count,
+            "invalid_count": invalid_count,
+            "min": round(stats["min"], 2),
+            "max": round(stats["max"], 2),
+            "time_series": time_series
+        }
+    
+    finally:
+        client.close()
