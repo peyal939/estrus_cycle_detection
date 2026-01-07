@@ -12,13 +12,6 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
 import os
 from dotenv import load_dotenv
 
@@ -36,7 +29,19 @@ SECRET_KEY = 'django-insecure-5vi6f8ebm6-znrmh15d7yuj-wgfb9sm=e2#gp7$yn39!fw127i
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+_allowed_hosts_env = os.getenv('ALLOWED_HOSTS', '').strip()
+if not _allowed_hosts_env:
+    _allowed_hosts = []
+else:
+    _allowed_hosts = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
+
+# Always allow local development hosts, even if ALLOWED_HOSTS is set for production.
+_local_hosts = ['localhost', '127.0.0.1', '[::1]']
+
+if '*' in _allowed_hosts:
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = sorted(set(_allowed_hosts + _local_hosts))
 
 # CSRF trusted origins for production domain
 CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', 'https://harness-tag.pranisheba.com.bd').split(',')

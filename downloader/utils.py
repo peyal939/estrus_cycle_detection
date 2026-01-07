@@ -60,8 +60,20 @@ def generate_export_filename(tag_ids, start_datetime, end_datetime):
     return f"tag_id{tag_part}_{date_str}_{start_time_str}_{end_time_str}.csv"
 
 
-def estimate_query_size(collection, query):
-    """Estimate the number of documents matching the query."""
+def estimate_query_size(collection, query, max_count=None):
+    """Estimate the number of documents matching the query.
+
+    If max_count is provided, the count is capped by issuing a limited
+    count query, which is much faster for large matches.
+    """
+    if max_count is not None:
+        try:
+            max_count_int = int(max_count)
+            if max_count_int > 0:
+                return collection.count_documents(query, limit=max_count_int)
+        except Exception:
+            pass
+
     return collection.count_documents(query)
 
 

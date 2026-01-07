@@ -1,11 +1,12 @@
 import csv
 import pytz
 from datetime import datetime, timedelta, time
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import render
+import os
 from downloader.utils import (
     get_db_handle,
     get_distinct_tag_ids,
@@ -17,6 +18,47 @@ from downloader.utils import (
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+
+
+class _Echo:
+    def write(self, value):
+        return value
+
+
+def _iter_docs_in_time_chunks(collection, base_query, start_utc, end_utc, projection):
+    """Iterate matching documents using short-lived cursors.
+
+    Some MongoDB Atlas tiers disallow no-timeout cursors; chunking keeps each
+    cursor alive for a shorter time while still streaming a single CSV.
+    """
+    chunk_seconds = int(os.getenv("EXPORT_CHUNK_SECONDS", "3600"))
+    if chunk_seconds < 1:
+        chunk_seconds = 3600
+
+    base_query = dict(base_query)
+    base_query.pop('"time"', None)
+
+    current = start_utc
+    while current < end_utc:
+        next_end = min(current + timedelta(seconds=chunk_seconds), end_utc)
+        chunk_query = dict(base_query)
+        if next_end == end_utc:
+            chunk_query['"time"'] = {"$gte": current, "$lte": end_utc}
+        else:
+            chunk_query['"time"'] = {"$gte": current, "$lt": next_end}
+
+        cursor = (
+            collection.find(chunk_query, projection=projection)
+            .sort([('"time"', 1), ("_id", 1)])
+            .batch_size(500)
+        )
+        try:
+            for doc in cursor:
+                yield doc
+        finally:
+            cursor.close()
+
+        current = next_end
 
 
 class DownloadDataView(LoginRequiredMixin, APIView):
@@ -58,15 +100,12 @@ class DownloadDataView(LoginRequiredMixin, APIView):
 
             # Query MongoDB
             # The collection uses '"time"' as the time field
-            cursor = collection.find({'"time"': {"$gte": start_utc, "$lte": end_utc}})
-
-            # Prepare CSV response
-            response = HttpResponse(content_type="text/csv")
-            response["Content-Disposition"] = (
-                f'attachment; filename="harness_data_{start_date_str}_to_{end_date_str}.csv"'
+            query = {'"time"': {"$gte": start_utc, "$lte": end_utc}}
+            projection = {"_id": 1, "tagID": 1, '"time"': 1, "time": 1, "sensorData": 1}
+            docs_iter = _iter_docs_in_time_chunks(
+                collection, query, start_utc, end_utc, projection
             )
 
-            writer = csv.writer(response)
             sensor_fields = [
                 "ax",
                 "ay",
@@ -82,64 +121,67 @@ class DownloadDataView(LoginRequiredMixin, APIView):
                 "soc",
             ]
             header = ["packet_id", "tagID", "time", "time_epoch", "millis", *sensor_fields]
-            writer.writerow(header)
 
-            for doc in cursor:
-                # Convert time back to BST for CSV output?
-                # User said "time will be real date for mongo Bangladesh standard time"
-                # It's better to show the time in BST in the CSV so it matches the requested date.
+            def row_iter():
+                pseudo_buffer = _Echo()
+                writer = csv.writer(pseudo_buffer)
+                try:
+                    yield writer.writerow(header)
 
-                time_utc = doc.get('"time"')  # Access with quotes
-                time_epoch = doc.get("time")
+                    for doc in docs_iter:
+                        # Convert time back to BST for CSV output
+                        time_utc = doc.get('"time"')  # Access with quotes
+                        time_epoch = doc.get("time")
 
-                time_bst_str = ""
-                if isinstance(time_utc, datetime):
-                    # Ensure it is aware
-                    if time_utc.tzinfo is None:
-                        time_utc = pytz.UTC.localize(time_utc)
-                    time_bst = time_utc.astimezone(bst_tz)
-                    time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
-                    if time_epoch is None:
-                        # Reconstruct the original device-sent epoch (which was BST clock time expressed as UTC epoch)
-                        try:
-                            offset_seconds = int(time_bst.utcoffset().total_seconds())
-                            time_epoch = int(round(time_utc.timestamp() + offset_seconds))
-                        except Exception:
-                            time_epoch = None
-                elif time_epoch is not None:
-                    # Fallback: derive display time from packet header epoch
-                    try:
-                        timestamp = float(time_epoch)
-                        dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
-                            tzinfo=None
-                        )
-                        dt_bst = bst_tz.localize(dt_naive)
-                        time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
                         time_bst_str = ""
+                        if isinstance(time_utc, datetime):
+                            if time_utc.tzinfo is None:
+                                time_utc = pytz.UTC.localize(time_utc)
+                            time_bst = time_utc.astimezone(bst_tz)
+                            time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
+                            if time_epoch is None:
+                                try:
+                                    offset_seconds = int(time_bst.utcoffset().total_seconds())
+                                    time_epoch = int(round(time_utc.timestamp() + offset_seconds))
+                                except Exception:
+                                    time_epoch = None
+                        elif time_epoch is not None:
+                            try:
+                                timestamp = float(time_epoch)
+                                dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
+                                    tzinfo=None
+                                )
+                                dt_bst = bst_tz.localize(dt_naive)
+                                time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                time_bst_str = ""
 
-                sensor_data = doc.get("sensorData")
-                if not isinstance(sensor_data, list) or not sensor_data:
-                    continue
+                        sensor_data = doc.get("sensorData")
+                        if not isinstance(sensor_data, list) or not sensor_data:
+                            continue
 
-                packet_id = str(doc.get("_id", ""))
-                tag_id = doc.get("tagID")
+                        packet_id = str(doc.get("_id", ""))
+                        tag_id = doc.get("tagID")
 
-                for sample in sensor_data:
-                    if not isinstance(sample, dict):
-                        continue
-                    row = [
-                        packet_id,
-                        tag_id,
-                        time_bst_str,
-                        time_epoch,
-                        sample.get("millis"),
-                        *[sample.get(field) for field in sensor_fields],
-                    ]
-                    writer.writerow(row)
+                        for sample in sensor_data:
+                            if not isinstance(sample, dict):
+                                continue
+                            row = [
+                                packet_id,
+                                tag_id,
+                                time_bst_str,
+                                time_epoch,
+                                sample.get("millis"),
+                                *[sample.get(field) for field in sensor_fields],
+                            ]
+                            yield writer.writerow(row)
+                finally:
+                    client.close()
 
-            client.close()
-
+            response = StreamingHttpResponse(row_iter(), content_type="text/csv")
+            response["Content-Disposition"] = (
+                f'attachment; filename="harness_data_{start_date_str}_to_{end_date_str}.csv"'
+            )
             return response
 
         except ValueError:
@@ -241,28 +283,28 @@ class DatasetExporterView(LoginRequiredMixin, APIView):
 
             # Check dataset size and warn if large
             if not confirm_large:
-                doc_count = estimate_query_size(collection, query)
+                doc_count = estimate_query_size(
+                    collection, query, max_count=LARGE_DATASET_THRESHOLD + 1
+                )
                 if doc_count > LARGE_DATASET_THRESHOLD:
                     return JsonResponse(
                         {
                             "warning": True,
-                            "message": f"This query will download approximately {doc_count:,} records. This may take a while.",
+                            "message": f"This query will download more than {LARGE_DATASET_THRESHOLD:,} records. This may take a while.",
                             "count": doc_count,
                             "threshold": LARGE_DATASET_THRESHOLD,
                         }
                     )
 
             # Execute query
-            cursor = collection.find(query)
+            projection = {"_id": 1, "tagID": 1, '"time"': 1, "time": 1, "sensorData": 1}
+            docs_iter = _iter_docs_in_time_chunks(
+                collection, query, start_utc, end_utc, projection
+            )
 
             # Generate filename
             filename = generate_export_filename(tag_ids, start_bst, end_bst)
 
-            # Prepare CSV response
-            response = HttpResponse(content_type="text/csv")
-            response["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-            writer = csv.writer(response)
             sensor_fields = [
                 "ax",
                 "ay",
@@ -278,60 +320,64 @@ class DatasetExporterView(LoginRequiredMixin, APIView):
                 "soc",
             ]
             header = ["packet_id", "tagID", "time", "time_epoch", "millis", *sensor_fields]
-            writer.writerow(header)
 
-            for doc in cursor:
-                # Convert time back to BST for CSV output
-                time_utc = doc.get('"time"')
-                time_epoch = doc.get("time")
+            def row_iter():
+                pseudo_buffer = _Echo()
+                writer = csv.writer(pseudo_buffer)
+                try:
+                    yield writer.writerow(header)
 
-                time_bst_str = ""
-                if isinstance(time_utc, datetime):
-                    if time_utc.tzinfo is None:
-                        time_utc = pytz.UTC.localize(time_utc)
-                    time_bst = time_utc.astimezone(bst_tz)
-                    # Full seconds accuracy in timestamp
-                    time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
-                    if time_epoch is None:
-                        # Reconstruct the original device-sent epoch (which was BST clock time expressed as UTC epoch)
-                        try:
-                            offset_seconds = int(time_bst.utcoffset().total_seconds())
-                            time_epoch = int(round(time_utc.timestamp() + offset_seconds))
-                        except Exception:
-                            time_epoch = None
-                elif time_epoch is not None:
-                    # Fallback: derive display time from packet header epoch
-                    try:
-                        timestamp = float(time_epoch)
-                        dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
-                            tzinfo=None
-                        )
-                        dt_bst = bst_tz.localize(dt_naive)
-                        time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
+                    for doc in docs_iter:
+                        time_utc = doc.get('"time"')
+                        time_epoch = doc.get("time")
+
                         time_bst_str = ""
+                        if isinstance(time_utc, datetime):
+                            if time_utc.tzinfo is None:
+                                time_utc = pytz.UTC.localize(time_utc)
+                            time_bst = time_utc.astimezone(bst_tz)
+                            time_bst_str = time_bst.strftime("%Y-%m-%d %H:%M:%S")
+                            if time_epoch is None:
+                                try:
+                                    offset_seconds = int(time_bst.utcoffset().total_seconds())
+                                    time_epoch = int(round(time_utc.timestamp() + offset_seconds))
+                                except Exception:
+                                    time_epoch = None
+                        elif time_epoch is not None:
+                            try:
+                                timestamp = float(time_epoch)
+                                dt_naive = datetime.fromtimestamp(timestamp, pytz.UTC).replace(
+                                    tzinfo=None
+                                )
+                                dt_bst = bst_tz.localize(dt_naive)
+                                time_bst_str = dt_bst.strftime("%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                time_bst_str = ""
 
-                sensor_data = doc.get("sensorData")
-                if not isinstance(sensor_data, list) or not sensor_data:
-                    continue
+                        sensor_data = doc.get("sensorData")
+                        if not isinstance(sensor_data, list) or not sensor_data:
+                            continue
 
-                packet_id = str(doc.get("_id", ""))
-                tag_id = doc.get("tagID")
+                        packet_id = str(doc.get("_id", ""))
+                        tag_id = doc.get("tagID")
 
-                for sample in sensor_data:
-                    if not isinstance(sample, dict):
-                        continue
-                    row = [
-                        packet_id,
-                        tag_id,
-                        time_bst_str,
-                        time_epoch,
-                        sample.get("millis"),
-                        *[sample.get(field) for field in sensor_fields],
-                    ]
-                    writer.writerow(row)
+                        for sample in sensor_data:
+                            if not isinstance(sample, dict):
+                                continue
+                            row = [
+                                packet_id,
+                                tag_id,
+                                time_bst_str,
+                                time_epoch,
+                                sample.get("millis"),
+                                *[sample.get(field) for field in sensor_fields],
+                            ]
+                            yield writer.writerow(row)
+                finally:
+                    client.close()
 
-            client.close()
+            response = StreamingHttpResponse(row_iter(), content_type="text/csv")
+            response["Content-Disposition"] = f'attachment; filename="{filename}"'
             return response
 
         except ValueError as e:
